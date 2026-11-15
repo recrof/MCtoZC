@@ -1,0 +1,110 @@
+name: release
+
+# Pushing a tag like v1.2 builds both firmware variants and publishes them as a
+# GitHub release. Zephyr and its modules come from ZephCore's current manifest
+# (zephcore/west.yml on its master branch), the same tree the migrator must match.
+
+on:
+  push:
+    tags: [ "v[0-9]+.[0-9]+" ]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+env:
+  zephcore_repo: recrof/ZephCore
+  zephcore_ref: master
+  zephyr_sdk: 1.0.1
+  python_version: "3.12"
+  # Modules the migrator build needs (nRF52840, littlefs, no BLE/radio).
+  west_projects: zephyr,cmsis,cmsis_6,hal_nordic,littlefs,segger
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write   # create the release
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          path: mctozc
+
+      - name: Check out ZephCore (west manifest)
+        uses: actions/checkout@v6
+        with:
+          repository: ${{ env.zephcore_repo }}
+          ref: ${{ env.zephcore_ref }}
+          path: ws
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: ${{ env.python_version }}
+          cache: pip
+          cache-dependency-path: ws/requirements.txt
+
+      - name: Install host tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends cmake ninja-build device-tree-compiler
+          pip install west
+          pip install -r ws/requirements.txt   # adafruit-nrfutil, pinned by ZephCore
+
+      - name: Fetch Zephyr and modules
+        working-directory: ws
+        run: |
+          west init -l zephcore
+          # Zephyr's manifest is imported, so only a plain `west update` can fetch
+          # its modules; the project filter keeps it to the ones this build uses.
+          west config manifest.project-filter -- "-.*,$(echo "+${west_projects}" | sed 's/,/,+/g')"
+          west update --narrow --fetch-opt=--depth=1
+          pip install -r zephyr/scripts/requirements-base.txt
+
+      - name: Zephyr SDK (arm-zephyr-eabi)
+        id: sdk
+        uses: actions/cache@v5
+        with:
+          path: ~/zephyr-sdk-${{ env.zephyr_sdk }}
+          key: zephyr-sdk-${{ env.zephyr_sdk }}-arm-linux-x86_64
+
+      - name: Install Zephyr SDK
+        if: steps.sdk.outputs.cache-hit != 'true'
+        working-directory: ws
+        run: west sdk install --version "$zephyr_sdk" --toolchains arm-zephyr-eabi
+
+      - name: Build SoftDevice v6 and v7
+        env:
+          ZEPHCORE_WS: ${{ github.workspace }}/ws
+        run: |
+          export ZEPHYR_SDK_INSTALL_DIR="$HOME/zephyr-sdk-$zephyr_sdk"
+          cd ws && "$GITHUB_WORKSPACE/mctozc/build.sh"
+
+      - name: Collect release files
+        run: |
+          mkdir release
+          cp mctozc/out/MeshCore_to_ZephCore_SoftDevice_v{6,7}.{uf2,zip} release/
+          cd release && sha256sum * > SHA256SUMS
+          cat SHA256SUMS
+          ZY=$(git -C ../ws/zephyr describe --tags --always)
+          ZC=$(git -C ../ws rev-parse --short HEAD)
+          echo "Built with Zephyr ${ZY}, ZephCore ${ZC} (${zephcore_ref})" > ../notes-extra.txt
+
+      - uses: actions/upload-artifact@v5
+        with:
+          name: firmware
+          path: release/*
+
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" release/* --clobber
+          else
+            gh release create "$TAG" release/* --title "$TAG" --generate-notes \
+              --notes "$(cat notes-extra.txt)"
+          fi
