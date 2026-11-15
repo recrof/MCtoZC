@@ -2,12 +2,15 @@
 # MeshCore -> ZephCore repeater migration firmware (nRF52840, Adafruit UF2/OTA bootloader)
 #
 #   SoftDevice v6 (RAK4631, T-Echo, Heltec T114, ...):
-#     west build -b rak4631 <this dir> -d build_v6 -- -DDTC_OVERLAY_FILE=boards/sdv6.overlay
+#     west build -b nrf52840dk/nrf52840 <this dir> -d build_v6 -- -DDTC_OVERLAY_FILE=boards/sdv6.overlay
 #   SoftDevice v7 (T1000-E, Wio Tracker L1, XIAO nRF52840, ...):
-#     west build -b rak4631 <this dir> -d build_v7 -- -DDTC_OVERLAY_FILE=boards/sdv7.overlay
+#     west build -b nrf52840dk/nrf52840 <this dir> -d build_v7 -- -DDTC_OVERLAY_FILE=boards/sdv7.overlay
 #
-# rak4631 is only the nRF52840 base; the overlay supplies the flash map, so one
+# nrf52840dk is only the nRF52840 base; the overlay supplies the flash map, so one
 # image per SoftDevice covers every board on it (as ZephCore's formatter does).
+# The base must run no board code at boot: Zephyr's rak4631 board.c, for one,
+# writes UICR REGOUT0 (the GPIO/VDD rail voltage) on any board in high-voltage
+# mode, and that stays until a full chip erase.
 # Use build.sh, which builds both and packages the DFU zips.
 
 cmake_minimum_required(VERSION 3.20.0)

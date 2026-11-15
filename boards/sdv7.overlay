@@ -24,6 +24,10 @@
 		zephyr,code-partition = &code_partition;
 		zephyr,console = &cdc_acm_uart;
 		zephyr,shell-uart = &cdc_acm_uart;
+		/* nrf52840dk points these at uart0, which is disabled below. */
+		/delete-property/ zephyr,uart-mcumgr;
+		/delete-property/ zephyr,bt-mon-uart;
+		/delete-property/ zephyr,bt-c2h-uart;
 	};
 
 	/* Mounted by main.c, never at boot: see prj.conf. */
@@ -51,6 +55,38 @@
 /* No QSPI probing on boards that have none. */
 &qspi {
 	status = "disabled";
+};
+
+/*
+ * This image runs on every board with this SoftDevice, so it drives no pin and
+ * turns nothing on that only the base board (nrf52840dk) has: its UARTs, NFC
+ * and DC/DC regulators are off. DC/DC needs the board's inductors; the LDO
+ * works everywhere.
+ */
+&uart0 {
+	status = "disabled";
+};
+
+&uart1 {
+	status = "disabled";
+};
+
+&nfct {
+	status = "disabled";
+};
+
+&reg0 {
+	status = "disabled";
+};
+
+&reg1 {
+	regulator-initial-mode = <NRF5X_REG_MODE_LDO>;
+};
+
+/* The DK sets gpio-as-nreset, which makes nrfx SystemInit write UICR PSELRESET
+ * (and reset) when P0.18 is not already the reset pin. Leave UICR alone. */
+&uicr {
+	/delete-property/ gpio-as-nreset;
 };
 
 &flash0 {

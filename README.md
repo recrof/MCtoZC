@@ -37,9 +37,15 @@ MeshCore (Adafruit InternalFS, littlefs **v1**, 128 B blocks, 7×4 KB @ `0xED000
 The two volumes overlap (`0xED000–0xF4000`), so everything is read into RAM first, `storage_partition`
 (NVS bonds, `0xD0000`) and `lfs_partition` are erased, `/lfs` is created and written, then **remounted
 and compared byte-for-byte** before DFU is enabled. A write failure is retried 3×; do not power off
-while the log says so, the identity then exists only in RAM.
+while the log says so, the identity then exists only in RAM. In that state the log repeats the private
+key every 10 s as a `set prv.key <hex>` line: copy it, and after flashing ZephCore paste it on the USB
+console to restore the identity. It is printed only on this failure path.
 
 If no MeshCore identity is found, **nothing is erased**; the board drops to UF2 DFU so you can reflash.
+The same happens on a MeshCore **companion** (any of `/contacts3`, `/channels2`, `/adv_blobs`,
+`/new_prefs`, or the companion key `"man_add"` in `prefs.json`): its contacts and channels have no
+place in a repeater volume. A room server migrates like a repeater (identity, prefs, ACL; MeshCore
+keeps its posts in RAM only); flash ZephCore's room-server `.zip` afterwards.
 If a ZephCore repeater volume is already present it just enables DFU.
 
 ## Build
@@ -48,6 +54,11 @@ If a ZephCore repeater volume is already present it just enables DFU.
 ./build.sh        # both -> out/ (needs ~/Documents/ZephCore west workspace + Zephyr SDK)
 ./build.sh 7      # one
 ```
+
+Both images are built on `nrf52840dk/nrf52840`, a base board without a `board.c`. The overlays turn
+off what its devicetree would do on the board the image lands on: its UARTs (driven TX pins), NFC,
+DC/DC (LDO only) and its `gpio-as-nreset` UICR write. Don't build on `rak4631`: its `board.c` sets UICR REGOUT0 (the GPIO/VDD rail) to 3.3 V on
+any board powered through VDDH, and that stays until a full chip erase.
 
 `tests/host_lfs1_test.c` checks the vendored littlefs-v1 reader on the real MeshCore geometry
 (`tests/qemu` runs it on qemu_cortex_m3). `src/lfs1/` is the Adafruit littlefs v1.7 copy, symbols

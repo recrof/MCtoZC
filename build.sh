@@ -33,7 +33,7 @@ nrfutil_genpkg() {  # <sd-req> <hex> <zip>
 
 build_one() {
 	local v=$1 bd="$HERE/build_v$1"
-	( cd "$WS" && west build -b rak4631 "$HERE" --pristine -d "$bd" -- \
+	( cd "$WS" && west build -b nrf52840dk/nrf52840 "$HERE" --pristine -d "$bd" -- \
 		-DDTC_OVERLAY_FILE="$HERE/boards/sdv$v.overlay" )
 	cp "$bd/zephyr/zephyr.uf2" "$OUT/MeshCore_to_ZephCore_SoftDevice_v${v}.uf2"
 	nrfutil_genpkg "${SDREQ[$v]}" "$bd/zephyr/zephyr.hex" "$OUT/MeshCore_to_ZephCore_SoftDevice_v${v}.zip"

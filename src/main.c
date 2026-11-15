@@ -204,6 +204,41 @@ static bool blank_or_zero(const uint8_t *p, size_t n)
 	return a == 0 || b == 0xFF;
 }
 
+/*
+ * A MeshCore companion also keeps /_main.id and /prefs.json at the root, so
+ * those do not tell it apart. Its own files do, while they are on this volume;
+ * on boards with QSPI flash it moves contacts, channels and blobs there, and
+ * then only its prefs.json key "man_add" (manual contact add) remains.
+ */
+static const char *const companion_files[] = {
+	"/contacts3", "/channels2", "/adv_blobs", "/new_prefs",
+};
+
+static bool companion_file_present(void)
+{
+	struct lfs1_info info;
+
+	for (size_t i = 0; i < ARRAY_SIZE(companion_files); i++) {
+		if (lfs1_stat(&mc_lfs, companion_files[i], &info) >= 0) {
+			printk("  %s is a MeshCore companion file.\n", companion_files[i]);
+			return true;
+		}
+	}
+	return false;
+}
+
+static bool contains(const uint8_t *buf, size_t len, const char *s)
+{
+	size_t n = strlen(s);
+
+	for (size_t i = 0; i + n <= len; i++) {
+		if (memcmp(buf + i, s, n) == 0) {
+			return true;
+		}
+	}
+	return false;
+}
+
 /* Step 1. Returns 0 when a usable MeshCore repeater volume was read into RAM. */
 static int snapshot_meshcore(void)
 {
@@ -218,9 +253,10 @@ static int snapshot_meshcore(void)
 	list_dir("/identity");
 
 	int err = 0;
+	bool companion = companion_file_present();
 
 	/* The legacy binary prefs only matter when there is no prefs.json. */
-	for (int i = 0; i < IT_COUNT && !err; i++) {
+	for (int i = 0; i < IT_COUNT && !err && !companion; i++) {
 		if (i == IT_LEGACY && items[IT_PREFS].found) {
 			continue;
 		}
@@ -230,6 +266,16 @@ static int snapshot_meshcore(void)
 
 	if (err) {
 		return err;
+	}
+	if (!companion && items[IT_PREFS].found &&
+	    contains(items[IT_PREFS].buf, items[IT_PREFS].len, "\"man_add\"")) {
+		printk("  prefs.json has the companion key \"man_add\".\n");
+		companion = true;
+	}
+	if (companion) {
+		printk("This is a MeshCore companion, not a repeater or room server: its contacts "
+		       "and channels would be lost.\n");
+		return -ENOTSUP;
 	}
 	struct item *id = &items[IT_ID];
 
@@ -422,6 +468,24 @@ static void wait_for_terminal(void)
 	k_msleep(300);
 }
 
+/*
+ * Last resort when the volume could not be written: the identity is now only in
+ * RAM. Print the private key in the form ZephCore's `set prv.key <hex>` takes
+ * (the 64-byte expanded key; _main.id is pub(32) || prv(64), or prv alone).
+ */
+static void print_private_key(void)
+{
+	const struct item *id = &items[IT_ID];
+	const uint8_t *prv = id->buf + (id->len == ID_LEN_FULL ? ID_LEN_FULL - ID_LEN_PRV : 0);
+
+	printk("Private key (keep it secret). Flash ZephCore, then on its USB console:\n");
+	printk("  set prv.key ");
+	for (int i = 0; i < ID_LEN_PRV; i++) {
+		printk("%02x", prv[i]);
+	}
+	printk("\n");
+}
+
 static void __noreturn reboot_into(uint8_t magic)
 {
 	nrf_power_gpregret_set(NRF_POWER, 0, magic);
@@ -458,10 +522,13 @@ int main(void)
 		}
 		printk("  attempt %d failed (%d)\n", attempt, rc);
 		if (attempt >= 3) {
-			printk("\nMIGRATION FAILED. Do not power off: the identity is only in RAM.\n");
-			printk("Reset to retry (the old volume may already be erased).\n");
+			/* Repeated so a terminal opened late still sees the key. */
 			for (;;) {
-				k_msleep(1000);
+				printk("\nMIGRATION FAILED. Do not power off: the identity is only in "
+				       "RAM.\n");
+				printk("Reset to retry (the old volume may already be erased).\n");
+				print_private_key();
+				k_msleep(10000);
 			}
 		}
 	}
